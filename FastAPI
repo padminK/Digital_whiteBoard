@@ -1,0 +1,32 @@
+from fastapi import FastAPI, WebSocket
+
+app = FastAPI()
+
+# Store whiteboard data (in memory for this example - use a database in production)
+whiteboards = {}
+
+@app.websocket("/ws/board/{room_id}")
+async def websocket_endpoint(websocket: WebSocket, room_id: str):
+    await websocket.accept()
+
+    if room_id not in whiteboards:
+      whiteboards[room_id] = [] # Initialize if room doesn't exist
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+            if data["type"] == "draw":
+                whiteboards[room_id].append(data["data"]) # Store drawing data
+                for client in whiteboards[room_id]: # Broadcast to all clients in the room
+                    await client.send_json(data)
+
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+    finally:
+        # Handle disconnections (remove from clients list, etc.)
+        pass
+
+# Example endpoint to get board data
+@app.get("/board/{room_id}")
+async def get_board(room_id: str):
+    return {"data": whiteboards.get(room_id, [])}

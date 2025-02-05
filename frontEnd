@@ -1,69 +1,138 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 
-function Whiteboard({ roomId }) {
+const Whiteboard = () => {
   const canvasRef = useRef(null);
-  const [context, setContext] = useState(null);
+  const contextRef = useRef(null);
   const [isDrawing, setIsDrawing] = useState(false);
-  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [brushColor, setBrushColor] = useState('black');
+  const [brushSize, setBrushSize] = useState(5);
+  const [drawnLines, setDrawnLines] = useState([]); // Store drawing history
+  const [redoStack, setRedoStack] = useState([]);   // Store undone actions
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    setContext(ctx);
+    const context = canvas.getContext('2d');
+    contextRef.current = context;
 
-    // WebSocket connection
-    const ws = new WebSocket(ws://your-backend-url/ws/board/${roomId});
+    // Set canvas dimensions (important!)
+    canvas.width = window.innerWidth * 0.8; // Example: 80% of window width
+    canvas.height = window.innerHeight * 0.7; // Example: 70% of window height
 
-    ws.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      // Process drawing data and update canvas
-      if (message.type === 'draw') {
-        drawOnCanvas(message.data);
-      }
-    };
-
-    return () => ws.close(); // Clean up on unmount
-  }, [roomId]);
+    // Initial canvas setup (optional background, etc.)
+    context.lineCap = 'round'; // Smooth lines
+    context.lineJoin = 'round';
+  }, []);
 
   const handleMouseDown = (e) => {
     setIsDrawing(true);
-    setPosition({ x: e.offsetX, y: e.offsetY });
+    const { offsetX, offsetY } = e.nativeEvent;
+    contextRef.current.beginPath();
+    contextRef.current.moveTo(offsetX, offsetY);
+
+    // Store the starting point of the line
+    setDrawnLines([...drawnLines, {
+        type: "line",
+        color: brushColor,
+        size: brushSize,
+        points: [{x: offsetX, y: offsetY}]
+    }]);
   };
 
   const handleMouseMove = (e) => {
     if (!isDrawing) return;
-    const newPosition = { x: e.offsetX, y: e.offsetY };
-    drawOnCanvas({ ...position, ...newPosition }); // Draw a line
-    sendDrawingData({ ...position, ...newPosition }); // Send over WebSocket
-    setPosition(newPosition);
+    const { offsetX, offsetY } = e.nativeEvent;
+    contextRef.current.lineTo(offsetX, offsetY);
+    contextRef.current.strokeStyle = brushColor;
+    contextRef.current.lineWidth = brushSize;
+    contextRef.current.stroke();
+
+    // Update the points of the current line in the drawing history
+    setDrawnLines(prevLines => {
+        const updatedLines = [...prevLines];
+        const lastLine = updatedLines[updatedLines.length - 1];
+        lastLine.points.push({x: offsetX, y: offsetY});
+        return updatedLines;
+    });
   };
 
-  const handleMouseUp = () => setIsDrawing(false);
-
-  const drawOnCanvas = (data) => {
-    if (!context) return;
-    context.beginPath();
-    context.moveTo(data.x, data.y);
-    context.lineTo(data.x1, data.y1); // Assuming x1, y1 are the new position
-    context.stroke();
+  const handleMouseUp = () => {
+    setIsDrawing(false);
+    contextRef.current.closePath();
   };
 
-  const sendDrawingData = (data) => {
-    const ws = new WebSocket(ws://your-backend-url/ws/board/${roomId});
-    ws.send(JSON.stringify({ type: 'draw', roomId, data }));
-  }
+  const handleMouseOut = () => {
+    setIsDrawing(false);
+    contextRef.current.closePath();
+  };
+
+  const handleClear = () => {
+    contextRef.current.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    setDrawnLines([]);
+    setRedoStack([]);
+  };
+
+  const handleUndo = () => {
+    if (drawnLines.length > 0) {
+      const lastLine = drawnLines.pop();
+      setRedoStack([...redoStack, lastLine]);
+      redrawCanvas();
+    }
+  };
+
+  const handleRedo = () => {
+      if (redoStack.length > 0) {
+          const lastUndoneLine = redoStack.pop();
+          setDrawnLines([...drawnLines, lastUndoneLine]);
+          redrawCanvas();
+      }
+  };
+
+  const redrawCanvas = () => {
+    const context = contextRef.current;
+    context.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height); // Clear canvas
+    drawnLines.forEach(line => {
+        context.beginPath();
+        context.moveTo(line.points[0].x, line.points[0].y);
+        line.points.slice(1).forEach(point => {
+            context.lineTo(point.x, point.y);
+        });
+        context.strokeStyle = line.color;
+        context.lineWidth = line.size;
+        context.stroke();
+        context.closePath();
+    });
+};
+
+
+  const handleSave = () => {
+    const canvas = canvasRef.current;
+    const dataURL = canvas.toDataURL('image/png'); // Or 'image/jpeg'
+    const link = document.createElement('a');
+    link.href = dataURL;
+    link.download = 'whiteboard.png'; // Set filename
+    link.click();
+  };
 
   return (
-    <canvas
-      ref={canvasRef}
-      width={800}
-      height={600}
-      style={{ border: '1px solid black' }}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-    />
+    <div>
+      <canvas
+        ref={canvasRef}
+        style={{ border: '1px solid black', cursor: 'crosshair' }}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseOut={handleMouseOut}
+      />
+      <div>
+        <button onClick={handleClear}>Clear</button>
+        <button onClick={handleUndo}>Undo</button>
+        <button onClick={handleRedo}>Redo</button>
+        <button onClick={handleSave}>Save</button>
+        <input type="color" value={brushColor} onChange={e => setBrushColor(e.target.value)} />
+        <input type="range" min="1" max="20" value={brushSize} onChange={e => setBrushSize(e.target.value)} />
+      </div>
+    </div>
   );
-}
+};
 
 export default Whiteboard;

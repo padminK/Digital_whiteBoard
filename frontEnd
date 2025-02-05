@@ -1,0 +1,69 @@
+import React, { useState, useRef, useEffect } from 'react';
+
+function Whiteboard({ roomId }) {
+  const canvasRef = useRef(null);
+  const [context, setContext] = useState(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    setContext(ctx);
+
+    // WebSocket connection
+    const ws = new WebSocket(ws://your-backend-url/ws/board/${roomId});
+
+    ws.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      // Process drawing data and update canvas
+      if (message.type === 'draw') {
+        drawOnCanvas(message.data);
+      }
+    };
+
+    return () => ws.close(); // Clean up on unmount
+  }, [roomId]);
+
+  const handleMouseDown = (e) => {
+    setIsDrawing(true);
+    setPosition({ x: e.offsetX, y: e.offsetY });
+  };
+
+  const handleMouseMove = (e) => {
+    if (!isDrawing) return;
+    const newPosition = { x: e.offsetX, y: e.offsetY };
+    drawOnCanvas({ ...position, ...newPosition }); // Draw a line
+    sendDrawingData({ ...position, ...newPosition }); // Send over WebSocket
+    setPosition(newPosition);
+  };
+
+  const handleMouseUp = () => setIsDrawing(false);
+
+  const drawOnCanvas = (data) => {
+    if (!context) return;
+    context.beginPath();
+    context.moveTo(data.x, data.y);
+    context.lineTo(data.x1, data.y1); // Assuming x1, y1 are the new position
+    context.stroke();
+  };
+
+  const sendDrawingData = (data) => {
+    const ws = new WebSocket(ws://your-backend-url/ws/board/${roomId});
+    ws.send(JSON.stringify({ type: 'draw', roomId, data }));
+  }
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={800}
+      height={600}
+      style={{ border: '1px solid black' }}
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+    />
+  );
+}
+
+export default Whiteboard;

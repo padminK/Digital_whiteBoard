@@ -1,0 +1,13 @@
+{
+  "type": "draw", // or "erase", "clear", "text", "image", etc.
+  "roomId": "12345",
+  "userId": "user123",
+  "data": {
+    "x": 100,
+    "y": 200,
+    "color": "red",
+    "brushSize": 5,
+    // ... other drawing properties
+  },
+  "timestamp": 1678886400000 // Optional timestamp
+}

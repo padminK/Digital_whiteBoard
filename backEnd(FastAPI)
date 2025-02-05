@@ -1,32 +1,103 @@
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, HTTPException
+from fastapi.responses import HTMLResponse
+from typing import List, Dict
+import asyncio
+import json
+from pymongo import MongoClient  # Example using MongoDB
 
 app = FastAPI()
 
-# Store whiteboard data (in memory for this example - use a database in production)
-whiteboards = {}
+# --- Database Configuration (MongoDB Example) ---
+try:
+    client = MongoClient("mongodb://localhost:27017/")  # Replace with your MongoDB connection string
+    db = client["whiteboard_db"]  # Replace with your database name
+    collection = db["drawings"] # Replace with your collection name
+except Exception as e:
+    print(f"Error connecting to MongoDB: {e}")
+    # Handle the error appropriately, e.g., exit the application or use a fallback
 
-@app.websocket("/ws/board/{room_id}")
-async def websocket_endpoint(websocket: WebSocket, room_id: str):
+# --- WebSocket Handling ---
+active_connections: List[WebSocket] = []
+drawing_history: Dict = {}  # Use a dictionary to store history per board
+
+async def broadcast(board_id: str, message: str):
+    for connection in active_connections:
+        try:
+            await connection.send_text(message)
+        except RuntimeError:  # Handle disconnected clients
+            active_connections.remove(connection)
+
+@app.websocket("/ws/{board_id}")
+async def websocket_endpoint(websocket: WebSocket, board_id: str):
     await websocket.accept()
+    active_connections.append(websocket)
 
-    if room_id not in whiteboards:
-      whiteboards[room_id] = [] # Initialize if room doesn't exist
-
+    # Load initial drawing history from the database
     try:
-        while True:
-            data = await websocket.receive_json()
-            if data["type"] == "draw":
-                whiteboards[room_id].append(data["data"]) # Store drawing data
-                for client in whiteboards[room_id]: # Broadcast to all clients in the room
-                    await client.send_json(data)
-
+      saved_data = collection.find_one({"board_id": board_id})
+      if saved_data:
+          drawing_history[board_id] = saved_data.get("drawing_history", [])
+          await websocket.send_text(json.dumps({"type": "initial_data", "data": drawing_history[board_id]}))
+      else:
+          drawing_history[board_id] = []  # Initialize if no data is found
     except Exception as e:
-        print(f"WebSocket error: {e}")
-    finally:
-        # Handle disconnections (remove from clients list, etc.)
-        pass
+        print(f"Error loading from MongoDB: {e}")
+        await websocket.send_text(json.dumps({"type": "error", "message": "Error loading data"}))
 
-# Example endpoint to get board data
-@app.get("/board/{room_id}")
-async def get_board(room_id: str):
-    return {"data": whiteboards.get(room_id, [])}
+    while True:
+        try:
+            data = await websocket.receive_text()
+            message = json.loads(data)  # Parse the JSON message
+
+            if message["type"] == "draw":
+                drawing_history[board_id].append(message["data"])  # Update drawing history
+                await broadcast(board_id, data) # Broadcast to all clients on this board
+
+                # Save to database (asyncio.create_task for non-blocking save)
+                asyncio.create_task(save_drawing_history(board_id))
+
+            elif message["type"] == "clear":
+                drawing_history[board_id] = []
+                await broadcast(board_id, data)  # Broadcast the clear event
+                asyncio.create_task(save_drawing_history(board_id))
+
+            elif message["type"] == "undo" or message["type"] == "redo":
+                # Update drawing history based on undo/redo logic
+                # ... (Implement logic as needed) ...
+                await broadcast(board_id, data)
+                asyncio.create_task(save_drawing_history(board_id)) # Save after undo/redo
+
+        except Exception as e:
+            print(f"WebSocket error: {e}")
+            break  # Exit the loop if there's an error
+
+    active_connections.remove(websocket)
+    await websocket.close()
+
+async def save_drawing_history(board_id: str):
+    try:
+        await asyncio.to_thread(collection.replace_one,  # Use to_thread for non-blocking DB operation
+            {"board_id": board_id},
+            {"board_id": board_id, "drawing_history": drawing_history[board_id]},
+            upsert=True  # Create if it doesn't exist
+        )
+        print(f"Saved drawing history for board {board_id}")
+    except Exception as e:
+        print(f"Error saving to MongoDB: {e}")
+
+
+# --- Example HTML for testing ---
+@app.get("/", response_class=HTMLResponse)
+async def get_index():
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Whiteboard</title>
+    </head>
+    <body>
+        <h1>Whiteboard (Backend)</h1>
+        <p>Connect to the WebSocket at /ws/{board_id}</p>
+    </body>
+    </html>
+    """
